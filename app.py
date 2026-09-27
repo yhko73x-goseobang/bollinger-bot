@@ -143,7 +143,7 @@ if st.button("🚀 볼린저 밴드 하단 검사 및 텔레그램 전송 실행
             res = send_telegram_message(bot_token, chat_id, final_message)
             
             if res.get("ok"):
-                st.success(f"검사 완료! 조건에 맞는 종목 {detected_count개}를 텔레그램으로 성공적으로 전송했습니다.")
+                st.success(f"검사 완료! 조건에 맞는 종목 {detected_count}개를 텔레그램으로 성공적으로 전송했습니다.")
                 st.markdown(final_message)
             else:
                 st.error(f"텔레그램 전송 실패: {res.get('description')}")
