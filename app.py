@@ -26,13 +26,14 @@ all_intervals = {
     '15분봉 (15m)': '15m',
     '30분봉 (30m)': '30m',
     '1시간봉 (1h)': '1h',
-    '4시간/일봉 (1d)': '1d'
+    '4시간봉 (4h)': '4h',  # 1시간봉 데이터를 리샘플링하여 계산
+    '일봉 (1d)': '1d'
 }
 
 selected_interval_labels = st.sidebar.multiselect(
     "검사할 시간대를 여러 개 선택하세요:",
     options=list(all_intervals.keys()),
-    default=['5분봉 (5m)', '15분봉 (15m)', '30분봉 (30m)', '1시간봉 (1h)', '4시간/일봉 (1d)']
+    default=['5분봉 (5m)', '15분봉 (15m)', '30분봉 (30m)', '1시간봉 (1h)', '4시간봉 (4h)', '일봉 (1d)']
 )
 selected_intervals = [all_intervals[label] for label in selected_interval_labels]
 
@@ -93,6 +94,7 @@ if st.button("🚀 볼린저 밴드 하단 검사 및 텔레그램 전송 실행
                 '15m': '5d',
                 '30m': '7d',
                 '1h': '60d',
+                '4h': '60d',  # 4시간봉용 1시간 데이터 수집
                 '1d': '1y'
             }
 
@@ -107,8 +109,11 @@ if st.button("🚀 볼린저 밴드 하단 검사 및 텔레그램 전송 실행
                     current_task += 1
                     progress_bar.progress(current_task / total_tasks)
                     try:
+                        # 4시간봉인 경우 1시간봉 데이터를 받아와서 4시간 단위로 묶음
+                        fetch_interval = '1h' if interval == '4h' else interval
                         period = period_map.get(interval, '1mo')
-                        df = yf.download(ticker, period=period, interval=interval, progress=False)
+                        
+                        df = yf.download(ticker, period=period, interval=fetch_interval, progress=False)
                         
                         if df.empty or len(df) < 25:
                             continue
@@ -116,7 +121,17 @@ if st.button("🚀 볼린저 밴드 하단 검사 및 텔레그램 전송 실행
                         if isinstance(df.columns, pd.MultiIndex):
                             df.columns = df.columns.get_level_values(0)
 
-                        # 볼린저 밴드 계산 (20일 기준, 2 표준편차)
+                        # 4시간봉 변환 (Resample)
+                        if interval == '4h':
+                            df = df.resample('4h').agg({
+                                'Open': 'first',
+                                'High': 'max',
+                                'Low': 'min',
+                                'Close': 'last',
+                                'Volume': 'sum'
+                            }).dropna()
+
+                        # 볼린저 밴드 계산 (20일/봉 기준, 2 표준편차)
                         df['MA20'] = df['Close'].rolling(window=20).mean()
                         df['STD'] = df['Close'].rolling(window=20).std()
                         df['Lower'] = df['MA20'] - (df['STD'] * 2)
