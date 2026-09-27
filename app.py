@@ -1,23 +1,43 @@
-import time
-import requests
+import streamlit as st
 import pandas as pd
 import yfinance as yf
 from datetime import datetime
-import schedule # pip install schedule
+import requests
 
 # ==========================================
-# 1. 텔레그램 설정 및 종목/타임프레임 정의
+# 페이지 설정 및 기본값
 # ==========================================
-BOT_TOKEN = "8345013135:AAExhqYJmc2_zX1QRyGAmNoLgox7oPPU0hI"
-CHAT_ID = "6287856148"
+st.set_page_config(page_title="볼린저 밴드 하단 알리미", layout="wide")
 
-# 기본 검색 시간대 (5분, 15분, 30분, 1시간, 4시간, 일봉)
-# yfinance interval 형식: '5m', '15m', '30m', '1h', '4h'(yfinance는 4h 직접 지원 안될 수 있어 1h 데이터 리샘플링 또는 1h/1d 조합 사용, 여기서는 표준 인터벌 사용)
-INTERVALS = ['5m', '15m', '30m', '1h', '1d'] 
+st.title("📊 다중 타임프레임 볼린저 밴드 하단 알리미")
+st.markdown("설정된 종목과 타임프레임을 검사하여 텔레그램으로 실시간 알림을 보냅니다.")
+
+# 사이드바 설정 (토큰 및 채팅 ID)
+st.sidebar.header("🔑 텔레그램 설정")
+bot_token = st.sidebar.text_input("Bot Token", value="8345013135:AAExhqYJmc2_zX1QRyGAmNoLgox7oPPU0hI")
+chat_id = st.sidebar.text_input("Chat ID", value="6287856148")
+
+# ==========================================
+# 타임프레임 및 종목 정의
+# ==========================================
+st.sidebar.header("⏱️ 타임프레임 선택")
+all_intervals = {
+    '5분봉 (5m)': '5m',
+    '15분봉 (15m)': '15m',
+    '30분봉 (30m)': '30m',
+    '1시간봉 (1h)': '1h',
+    '4시간/일봉 (1d)': '1d'
+}
+
+selected_interval_labels = st.sidebar.multiselect(
+    "검사할 시간대를 여러 개 선택하세요:",
+    options=list(all_intervals.keys()),
+    default=['5분봉 (5m)', '15분봉 (15m)', '30분봉 (30m)', '1시간봉 (1h)', '4시간/일봉 (1d)']
+)
+selected_intervals = [all_intervals[label] for label in selected_interval_labels]
 
 # 요청하신 100개 기업 + 빈칸 20개 (총 120개 슬롯)
-TICKERS = [
-    # 지정해주신 100개 기업
+default_tickers = [
     "NVDA", "AAPL", "MSFT", "AMZN", "GOOGL", "GOOG", "META", "AVGO", "TSLA", "MU",
     "LLY", "JPM", "WMT", "AMD", "BRK-B", "V", "XOM", "JNJ", "INTC", "MA",
     "ABBV", "CSCO", "ORCL", "CVX", "PLTR", "BAC", "COST", "KO", "CAT", "DELL",
@@ -28,18 +48,25 @@ TICKERS = [
     "SBUX", "GILD", "NKE", "BLK", "CCEP", "UNP", "LOW", "COP", "VRTX", "ADBE",
     "SHOP", "PYPL", "DDOG", "ABNB", "DASH", "APP", "CEG", "LIN", "ADI", "HON",
     "WDC", "STX", "MDT", "SNOW", "WDAY", "SNPS", "CDNS", "REGN", "MDLZ", "ISRG", "MCHP",
-    # 추가 빈칸 20개 슬롯 (필요시 종목명을 입력하여 사용하세요)
-    "", "", "", "", "", "", "", "", "", "",
-    "", "", "", "", "", "", "", "", "", ""
-]
+] + [""] * 20
+
+st.subheader("📋 검사 대상 종목 리스트 (수정 가능)")
+tickers_input = st.text_area(
+    "종목 코드를 쉼표(,) 또는 줄바꿈으로 구분하여 입력하세요.",
+    value=", ".join(default_tickers),
+    height=150
+)
+
+# 입력받은 종목 정리 (빈칸 제거)
+tickers = [t.strip().upper() for t in tickers_input.replace("\n", ",").split(",") if t.strip()]
 
 # ==========================================
-# 2. 텔레그램 메시지 전송 함수
+# 텔레그램 전송 함수
 # ==========================================
-def send_telegram_message(message):
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+def send_telegram_message(token, chat, message):
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
     payload = {
-        "chat_id": CHAT_ID,
+        "chat_id": chat,
         "text": message,
         "parse_mode": "Markdown"
     }
@@ -47,87 +74,76 @@ def send_telegram_message(message):
         response = requests.post(url, json=payload)
         return response.json()
     except Exception as e:
-        print(f"텔레그램 전송 에러: {e}")
+        return {"ok": False, "description": str(e)}
 
 # ==========================================
-# 3. 볼린저 밴드 계산 및 조건 검사 로직
+# 실행 버튼
 # ==========================================
-def check_bollinger_bands():
-    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S]')} 볼린저 밴드 하단 검사 시작...")
-    
-    # yfinance 주기 설정 (짧은 분봉은 최근 데이터만 조회 가능)
-    period_map = {
-        '5m': '5d',
-        '15m': '5d',
-        '30m': '7d',
-        '1h': '60d',
-        '1d': '1y'
-    }
-
-    report_messages = ["🚨 *다중 타임프레임 볼린저 밴드 하단 터치 알림* 🚨\n"]
-    detected_count = 0
-
-    for ticker in TICKERS:
-        if not ticker.strip(): # 빈칸 슬롯 무시
-            continue
-            
-        for interval in INTERVALS:
-            try:
-                period = period_map.get(interval, '1mo')
-                df = yf.download(ticker, period=period, interval=interval, progress=False)
-                
-                if df.empty or len(df) < 25:
-                    continue
-                
-                # MultiIndex 컬럼 처리 (yfinance 최신 버전 대응)
-                if isinstance(df.columns, pd.MultiIndex):
-                    df.columns = df.columns.get_level_values(0)
-
-                # 볼린저 밴드 계산 (20일 기준, 2 표준편차)
-                df['MA20'] = df['Close'].rolling(window=20).mean()
-                df['STD'] = df['Close'].rolling(window=20).std()
-                df['Upper'] = df['MA20'] + (df['STD'] * 2)
-                df['Lower'] = df['MA20'] - (df['STD'] * 2)
-
-                # 최신 봉 기준 하단 터치 또는 이탈 여부 확인
-                latest = df.iloc[-1]
-                close_price = float(latest['Close'])
-                lower_band = float(latest['Lower'])
-
-                if close_price <= lower_band:
-                    detected_count += 1
-                    msg = f"• *{ticker}* ({interval}): 종가 `${close_price:.2f}` (하단 밴드: `${lower_band:.2f}`)"
-                    report_messages.append(msg)
-            
-            except Exception as e:
-                # API 호출 제한이나 일시적 오류 패스
-                continue
-                
-    if detected_count > 0:
-        final_message = "\n".join(report_messages)
+if st.button("🚀 볼린저 밴드 하단 검사 및 텔레그램 전송 실행", type="primary"):
+    if not bot_token or not chat_id:
+        st.error("텔레그램 Bot Token과 Chat ID를 입력해주세요.")
+    elif not selected_intervals:
+        st.error("최소 하나 이상의 타임프레임을 선택해주세요.")
+    elif not tickers:
+        st.error("검사할 종목이 없습니다.")
     else:
-        final_message = f"📊 *볼린저 밴드 검사 완료* ({datetime.now().strftime('%m-%d %H:%M')})\n- 설정된 종목 중 조건에 부합하는 하단 터치 종목이 없습니다."
+        with st.spinner("종목 데이터를 수집하고 볼린저 밴드를 계산 중입니다... 잠시만 기다려주세요."):
+            period_map = {
+                '5m': '5d',
+                '15m': '5d',
+                '30m': '7d',
+                '1h': '60d',
+                '1d': '1y'
+            }
 
-    send_telegram_message(final_message)
-    print("검사 및 알림 전송 완료.")
+            report_messages = ["🚨 *다중 타임프레임 볼린저 밴드 하단 터치 알림* 🚨\n"]
+            detected_count = 0
+            progress_bar = st.progress(0)
+            total_tasks = len(tickers) * len(selected_intervals)
+            current_task = 0
 
-# ==========================================
-# 4. 스케줄러 구동 (한국 시간 기준 매일 오전 8시, 저녁 8시)
-# ==========================================
-def run_scheduler():
-    # 한국 시간(KST) 매일 08:00, 20:00 지정
-    schedule.every().day.at("08:00").do(check_bollinger_bands)
-    schedule.every().day.at("20:00").do(check_bollinger_bands)
+            for ticker in tickers:
+                for interval in selected_intervals:
+                    current_task += 1
+                    progress_bar.progress(current_task / total_tasks)
+                    try:
+                        period = period_map.get(interval, '1mo')
+                        df = yf.download(ticker, period=period, interval=interval, progress=False)
+                        
+                        if df.empty or len(df) < 25:
+                            continue
+                        
+                        if isinstance(df.columns, pd.MultiIndex):
+                            df.columns = df.columns.get_level_values(0)
 
-    print("🤖 볼린저 밴드 알람 봇 스케줄러가 시작되었습니다.")
-    print("⏰ 실행 시간: 매일 오전 8:00, 저녁 8:00 (한국 시간)")
-    
-    # 테스트를 위해 실행 즉시 한번 검사하고 싶다면 아래 주석을 해제하세요.
-    # check_bollinger_bands()
+                        # 볼린저 밴드 계산 (20일 기준, 2 표준편차)
+                        df['MA20'] = df['Close'].rolling(window=20).mean()
+                        df['STD'] = df['Close'].rolling(window=20).std()
+                        df['Lower'] = df['MA20'] - (df['STD'] * 2)
 
-    while True:
-        schedule.run_pending()
-        time.sleep(1)
+                        latest = df.iloc[-1]
+                        close_price = float(latest['Close'])
+                        lower_band = float(latest['Lower'])
 
-if __name__ == "__main__":
-    run_scheduler()
+                        if close_price <= lower_band:
+                            detected_count += 1
+                            msg = f"• *{ticker}* ({interval}): 종가 `${close_price:.2f}` (하단: `${lower_band:.2f}`)"
+                            report_messages.append(msg)
+                    except Exception:
+                        continue
+            
+            progress_bar.empty()
+
+            if detected_count > 0:
+                final_message = "\n".join(report_messages)
+            else:
+                final_message = f"📊 *볼린저 밴드 검사 완료* ({datetime.now().strftime('%m-%d %H:%M')})\n- 설정된 종목 중 조건에 부합하는 하단 터치 종목이 없습니다."
+
+            # 텔레그램 전송
+            res = send_telegram_message(bot_token, chat_id, final_message)
+            
+            if res.get("ok"):
+                st.success(f"검사 완료! 조건에 맞는 종목 {detected_count개}를 텔레그램으로 성공적으로 전송했습니다.")
+                st.markdown(final_message)
+            else:
+                st.error(f"텔레그램 전송 실패: {res.get('description')}")
