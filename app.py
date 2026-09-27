@@ -9,10 +9,10 @@ st.set_page_config(page_title="30분봉 볼린저밴드 알리미", layout="cent
 st.title("📈 30분봉 볼린저밴드 하단 알리미")
 st.markdown("지정된 대량의 관심 종목을 관리하고, 볼린저밴드 하단 터치 시 텔레그램으로 알림을 받아보세요.")
 
-# --- 사이드바: 텔레그램 설정 ---
+# --- 사이드바: 텔레그램 설정 (기본값 자동 입력) ---
 st.sidebar.header("🔔 텔레그램 연동 설정")
-token = st.sidebar.text_input("Bot Token", type="password")
-chat_id = st.sidebar.text_input("Chat ID")
+token = st.sidebar.text_input("Bot Token", value="8345013135:AAExhqYJmc2_zX1QRyGAmNoLgox7oPPU0hI", type="password")
+chat_id = st.sidebar.text_input("Chat ID", value="6287856148")
 
 def send_telegram(msg, t, c):
     if not t or not c:
@@ -38,14 +38,13 @@ def format_ticker(raw_ticker):
         return "^KS200"
     # 국내 종목 코드 (6자리 숫자)
     if t.isdigit() and len(t) == 6:
-        # 주요 코스피/코스닥 구분 (편의상 기본 .KS 적용, 필요시 .KQ 자동 매칭 가능)
         return f"{t}.KS"
     return t
 
 # --- 메인 화면: 종목 관리 ---
 st.header("🎯 관심 종목 설정 (기본 종목 + 빈칸 추가)")
 
-# 요청하신 전체 기본 종목 리스트 (중복 제거 및 정리)
+# 요청하신 전체 기본 종목 리스트 (중복 제거)
 raw_default_tickers = [
     "US100", "KOSPI", "KOSPI200",
     "091160", "395270", "396500", "471760", "476260", "069500", "102110", "148020", "114800", "139230", 
@@ -55,7 +54,6 @@ raw_default_tickers = [
     "446720", "458730", "476550", "0238P0", "373590", "485230", "484120", "483320"
 ]
 
-# 중복 제거
 default_tickers = []
 for t in raw_default_tickers:
     if t not in default_tickers:
@@ -73,11 +71,11 @@ if uploaded_file is not None:
     except Exception as e:
         st.error(f"파일 읽기 실패: {e}")
 
-# 기본 종목들 + 추가 10개의 빈칸을 합쳐서 총 리스트 구성
+# 기본 종목들 + 추가 10개의 빈칸
 total_slots = len(default_tickers) + 10
 extended_defaults = default_tickers + [""] * 10
 
-st.info(f"총 {len(default_tickers)}개의 기본 종목과 여유분 빈칸 10개가 준비되어 있습니다. 아래에서 자유롭게 수정·추가하실 수 있습니다.")
+st.info(f"총 {len(default_tickers)}개의 기본 종목과 여유분 빈칸 10개가 준비되어 있습니다.")
 
 user_tickers = []
 col1, col2 = st.columns(2)
@@ -107,7 +105,7 @@ if st.button("🚀 볼린저밴드 상태 검사 및 알림 보내기", type="pr
         st.warning("종목을 최소 1개 이상 입력해주세요.")
     else:
         results = []
-        with st.spinner("30분봉 데이터를 수집하고 볼린저밴드를 계산 중입니다 (종목이 많아 수 초 소요될 수 있습니다)..."):
+        with st.spinner("30분봉 데이터를 수집하고 볼린저밴드를 계산 중입니다..."):
             for raw_t in user_tickers:
                 ticker = format_ticker(raw_t)
                 try:
